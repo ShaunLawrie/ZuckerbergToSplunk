@@ -1,0 +1,62 @@
+#Requires -Version 7
+param(
+    [string] $MessagesDirectoryPath = "$PSScriptRoot/messages/"
+)
+$ErrorActionPreference = "Stop"
+
+if(!(Test-Path $MessagesDirectoryPath)) {
+    Write-Error "You need to extract the facebook messages folder to $MessagesDirectoryPath"
+}
+
+$output = "" # keep banging the content into a string to avoid windows defender blasting the IO performance
+$epochStart = Get-Date "1970-01-01T00:00:00"
+$conversations = Get-ChildItem -Recurse -Path "$MessagesDirectoryPath/inbox" -Filter "*.json"
+               | Group-Object -Property { $_.Directory.Name }
+
+Foreach ($conversation in $conversations) {
+    Write-Host "Processing $($conversation.Name)"
+    Foreach ($messageArchive in $conversation.Group) {
+        $messageArchiveContent = Get-Content -Raw -Path $messageArchive.FullName | ConvertFrom-Json
+        Foreach ($message in $messageArchiveContent.messages) {
+            $messageDate = $EpochStart.AddMilliseconds($message.timestamp_ms)
+            
+            if($message.content) {
+                # Bruh facebook corrupted this by exporting as the wrong encoding
+                # Treat it as latin then flip it back to utf-8 to correct the emojiii 😑
+                $latinBytes = [System.Text.Encoding]::GetEncoding('iso-8859-1').GetBytes($message.content)
+                $content = [System.Text.Encoding]::UTF8.GetString($latinBytes)
+            } else {
+                $content = "No content"
+            }
+
+            if($message.photos) {
+                $message.type = "Photos"
+                if(!$content) {
+                    $content = "$($message.sender_name) sent a photo"
+                }
+            } elseif($message.sticker) {
+                $message.type = "Sticker"
+                if(!$content) {
+                    $content = "$($message.sender_name) sent a sticker"
+                }
+            } elseif($message.type -eq "Call") {
+                $content = $message.call_duration
+            } elseif($message.type -eq "Share") {
+                $content = $content + " " + $message.share.link
+            } elseif($message.type -eq "Subscribe" -or $message.type -eq "Unsubscribe") {
+                continue
+            }
+
+            $splunkEvent = @{
+                Sender = $message.sender_name
+                Message = $content
+                Type = $message.type
+                ChatTitle = $messageArchiveContent.title
+            }
+
+            $output += (($splunkEvent | ConvertTo-Json -Depth 10 -Compress) -replace "^{", "{`"Date`":`"$messageDate`",") + "`n"
+        }
+    }
+}
+
+Set-Content -Path "$PSScriptRoot/FlattenedMessages.json" -Value $output
