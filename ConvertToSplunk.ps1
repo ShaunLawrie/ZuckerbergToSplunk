@@ -8,17 +8,26 @@ if(!(Test-Path $MessagesDirectoryPath)) {
     Write-Error "You need to extract the facebook messages folder to $MessagesDirectoryPath"
 }
 
-$output = "" # keep banging the content into a string to avoid windows defender blasting the IO performance
-$epochStart = Get-Date "1970-01-01T00:00:00"
 $conversations = Get-ChildItem -Recurse -Path "$MessagesDirectoryPath/inbox" -Filter "*.json"
                | Group-Object -Property { $_.Directory.Name }
 
-Foreach ($conversation in $conversations) {
+Remove-Item -Path "$PSScriptRoot/FlattenedMessages.json" -ErrorAction SilentlyContinue
+
+$filelock = [System.Threading.ReaderWriterLockSlim]::new()
+$scriptroot = $PSScriptRoot
+$conversations | Foreach-Object -ThrottleLimit 12 -Parallel {
+    $conversation = $_
+    $filelock = $using:fileLock
+    $scriptroot = $using:scriptroot
     Write-Host "Processing $($conversation.Name)"
-    Foreach ($messageArchive in $conversation.Group) {
+    $conversation.Group | Foreach-Object -ThrottleLimit 12 -Parallel {
+        $output = ""
+        $messageArchive = $_
         $messageArchiveContent = Get-Content -Raw -Path $messageArchive.FullName | ConvertFrom-Json
+        $epochStart = Get-Date "1970-01-01T00:00:00"
+        $scriptroot = $using:scriptroot
         Foreach ($message in $messageArchiveContent.messages) {
-            $messageDate = $EpochStart.AddMilliseconds($message.timestamp_ms)
+            $messageDate = ($epochStart).AddMilliseconds($message.timestamp_ms)
             
             if($message.content) {
                 # Bruh facebook corrupted this by exporting as the wrong encoding
@@ -56,7 +65,18 @@ Foreach ($conversation in $conversations) {
 
             $output += (($splunkEvent | ConvertTo-Json -Depth 10 -Compress) -replace "^{", "{`"Date`":`"$messageDate`",") + "`n"
         }
+        $lock = $using:fileLock
+        try{
+            $lock.EnterWriteLock()
+            Add-Content -Path "./FlattenedMessages.json" -Value $output -NoNewline
+        }
+        catch {
+            Write-Warning "Failed to write conversation to file "
+        }
+        finally{
+            if($lock.IsWriteLockHeld){
+                $lock.ExitWriteLock()
+            }
+        }
     }
 }
-
-Set-Content -Path "$PSScriptRoot/FlattenedMessages.json" -Value $output
