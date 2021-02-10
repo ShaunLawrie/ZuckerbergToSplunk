@@ -9,5 +9,5 @@
 .history/
 
 # Artifacts
-FlattenedMessages.json
+*.json
 messages
