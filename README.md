@@ -1,7 +1,9 @@
 # ZuckerbergToSplunk
 
 This script parses Facebook messages from a download archive that has been downloaded in JSON format. The output format is one JSON event per line that can be easily pushed into Splunk.  
-It's not fast because I couldn't be bothered optimising it at all.    
+It's not fast because I couldn't be bothered optimising it at all.   
+
+![zuck to splunk example](images/zucktosplunk.png)
 
 ## Instructions
  * Download a Facebook archive from [Facebook "Download Your Information"](https://www.facebook.com/dyi).  
